@@ -1,0 +1,10 @@
+"STARTUP.obj",
+"RC522_RFID_READ.obj",
+"beep.obj",
+"ctrl.obj",
+"lcd12864.obj",
+"rc522.obj",
+"timer.obj",
+"uart.obj" 
+TO "RC522_RFID_READ" 
+RAMSIZE(256) 

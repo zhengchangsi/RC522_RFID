@@ -1,0 +1,433 @@
+C51 COMPILER V9.01   CTRL                                                                  04/23/2015 00:08:45 PAGE 1   
+
+
+C51 COMPILER V9.01, COMPILATION OF MODULE CTRL
+OBJECT MODULE PLACED IN ctrl.obj
+COMPILER INVOKED BY: D:\Keil\C51\BIN\C51.EXE Source\ctrl.c COMPACT BROWSE DEBUG OBJECTEXTEND PRINT(.\ctrl.lst) OBJECT(ct
+                    -rl.obj)
+
+line level    source
+
+   1          #include "reg52.h"
+   2          #include "string.h"
+   3          #include "depend.h"
+   4          #include "uart.h"  
+   5          #include "rc522.h"
+   6          #include "ctrl.h"
+   7          #include "beep.h"
+   8          
+   9          const INT8U DefaultKeyABuf[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+  10          
+  11          INT8U CardRevBuf[16] = { 0 };
+  12          INT8U const CardKeyABlockBuf[16] = {
+  13                                                                               0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  14                                                                               0xff,0x07,0x80,0x69,
+  15                                                                           0x00, 0x00, 0x00, 0x00, 0x00, 0x00,    
+  16                                                                          };
+  17          
+  18          INT8U CtrlMode = CTRL_PC_MODE;//CTRL_BOARD_MODE;
+  19          INT8U OptMode  = OPT_INC_MODE;
+  20          INT8U bPass = 0; bWarn = 0;
+  21          INT8U LedOnType = LED_LONG;
+  22          
+  23          void pass( void )
+  24          {
+  25   1         beep1();
+  26   1         LED_BLINK_1();
+  27   1      }
+  28          
+  29          void warn(void)
+  30          {
+  31   1        LED_BLINK_2();
+  32   1      }
+  33                  
+  34          void cal_keyA( INT8U *DestBuf )
+  35          {
+  36   1              const INT8U KeyABuf[] = { 0x20, 0x12, 0x10, 0x01, 0x00, 0x00 };
+  37   1      
+  38   1              memcpy( DestBuf, KeyABuf, 6 );
+  39   1      }
+  40                                   
+  41          void send_rebck( psUartData psUartDataRevSend )
+  42          {
+  43   1              INT8U * pTmp;
+  44   1              INT8U Len,Check;
+  45   1              INT8U i;
+  46   1      
+  47   1              Len = psUartDataRevSend->UartCmdLen     + psUartDataRevSend->UartDataLen + 2;
+  48   1              pTmp = ( INT8U * )psUartDataRevSend;
+  49   1      
+  50   1              send_byte( 0xFC );
+  51   1              Check = 0xFC;
+  52   1              for( i = 0; i < Len; i++ )
+  53   1              {
+  54   2                      send_byte( *pTmp );
+C51 COMPILER V9.01   CTRL                                                                  04/23/2015 00:08:45 PAGE 2   
+
+  55   2                      Check ^= *pTmp++;
+  56   2              }
+  57   1              send_byte( Check );     
+  58   1      }
+  59          
+  60          void uart_over( void )  //´®¿ÚÊý¾Ý»¹Ô­
+  61          {
+  62   1              UartCount = 0;
+  63   1              UartStart = FALSE;
+  64   1              UartComp = FALSE;
+  65   1      }
+  66          
+  67          INT8U check_com( psUartData psUartDataRevSend )
+  68          {
+  69   1              psUartDataRevSend->UartDataBuf[0] = 0xAA; //·µ»ØÊý¾ÝAA,ËµÃ÷´®¿ÚÍ¨ÐÅ³É¹¦
+  70   1      
+  71   1              return TRUE;
+  72   1      }
+  73          
+  74          INT8U req_card_sn( psUartData psUartDataRevSend )
+  75          {
+  76   1              if( PcdRequest( PICC_REQIDL, &CardRevBuf[0] ) != MI_OK )//Ñ°ÌìÏßÇøÄÚÎ´½øÈëÐÝÃß×´Ì¬µÄ¿¨£¬·µ»Ø¿¨Æ¬ÀàÐÍ 2×Ö½
+             -Ú        
+  77   1              {
+  78   2                      if( PcdRequest( PICC_REQIDL, &CardRevBuf[0] ) != MI_OK )//Ñ°ÌìÏßÇøÄÚÎ´½øÈëÐÝÃß×´Ì¬µÄ¿¨£¬·µ»Ø¿¨Æ¬ÀàÐÍ 2×Ö
+             -½Ú        
+  79   2                      {
+  80   3                              psUartDataRevSend->UartErrCode = ERROR_NOCARD;
+  81   3                              memset( psUartDataRevSend->UartDataBuf, 0x00, psUartDataRevSend->UartDataLen );//½« s ÖÐÇ° n ¸ö×Ö½ÚÓÃ c
+             -h Ìæ»»²¢·µ»Ø s 
+  82   3                              bWarn = 1;              //¶ÁÈ¡Ê§°Ü
+  83   3                              return FALSE;
+  84   3                      }       
+  85   2              }
+  86   1              
+  87   1              if( PcdAnticoll( &CardRevBuf[2] ) != MI_OK ) //·À³å×²£¬·µ»Ø¿¨µÄÐòÁÐºÅ 4×Ö½Ú 
+  88   1              {
+  89   2                      psUartDataRevSend->UartErrCode = ERROR_ATCLL;
+  90   2                      memset( psUartDataRevSend->UartDataBuf, 0x00, psUartDataRevSend->UartDataLen );
+  91   2                      bWarn = 1;
+  92   2                      return FALSE;   
+  93   2              }
+  94   1      
+  95   1              memcpy( psUartDataRevSend->UartDataBuf, &CardRevBuf[2], 4 ); //½«¿¨ºÅ·Åµ½Êý¾ÝÎ»ÖÃ
+  96   1      
+  97   1              bPass = 1;
+  98   1      
+  99   1              return TRUE;
+ 100   1      }
+ 101          
+ 102          INT8U updata_key( psUartData psUartDataRevSend )
+ 103          {
+ 104   1              INT8U CardKeyABuf[6];
+ 105   1              INT8U KeyBlockAddr;
+ 106   1      
+ 107   1              psUartDataRevSend->UartDataLen = 7;
+ 108   1              KeyBlockAddr = psUartDataRevSend->UartDataBuf[0];
+ 109   1        
+ 110   1              if( KeyBlockAddr % 4 != 3 )
+ 111   1              {
+ 112   2                      psUartDataRevSend->UartErrCode = ERROR_BLOCK_ADDR;
+ 113   2                      memset( &psUartDataRevSend->UartDataBuf[1], 0x00, 6 );
+C51 COMPILER V9.01   CTRL                                                                  04/23/2015 00:08:45 PAGE 3   
+
+ 114   2                      bWarn = 1;
+ 115   2                      return FALSE;   
+ 116   2              }
+ 117   1              
+ 118   1              if( PcdRequest( PICC_REQIDL, &CardRevBuf[0] ) != MI_OK )//Ñ°ÌìÏßÇøÄÚÎ´½øÈëÐÝÃß×´Ì¬µÄ¿¨£¬·µ»Ø¿¨Æ¬ÀàÐÍ 2×Ö½
+             -Ú        
+ 119   1              {
+ 120   2                      if( PcdRequest( PICC_REQIDL, &CardRevBuf[0] ) != MI_OK )//Ñ°ÌìÏßÇøÄÚÎ´½øÈëÐÝÃß×´Ì¬µÄ¿¨£¬·µ»Ø¿¨Æ¬ÀàÐÍ 2×Ö
+             -½Ú        
+ 121   2                      {
+ 122   3                              psUartDataRevSend->UartErrCode = ERROR_NOCARD;
+ 123   3                              memset( &psUartDataRevSend->UartDataBuf[1], 0x00, 6 );
+ 124   3                              bWarn = 1;
+ 125   3                              return FALSE;
+ 126   3                      }       
+ 127   2              }
+ 128   1      
+ 129   1              if( PcdAnticoll( &CardRevBuf[2] ) != MI_OK ) //·À³å×²£¬·µ»Ø¿¨µÄÐòÁÐºÅ 4×Ö½Ú 
+ 130   1              {
+ 131   2                      psUartDataRevSend->UartErrCode = ERROR_ATCLL;
+ 132   2                      memset( &psUartDataRevSend->UartDataBuf[1], 0x00, 6 );
+ 133   2                      bWarn = 1;
+ 134   2                      return FALSE;   
+ 135   2              }
+ 136   1      
+ 137   1              if( PcdSelect( &CardRevBuf[2] ) != MI_OK )//Ñ¡¿¨
+ 138   1              {
+ 139   2                      psUartDataRevSend->UartErrCode = ERROR_SLCT;
+ 140   2                      memset( &psUartDataRevSend->UartDataBuf[1], 0x00, 6 );
+ 141   2                      bWarn = 1;
+ 142   2                      return FALSE;
+ 143   2              }
+ 144   1      
+ 145   1              memcpy( CardKeyABuf, &psUartDataRevSend->UartDataBuf[1], 6 );
+ 146   1      
+ 147   1              if( PcdAuthState( PICC_AUTHENT1A, KeyBlockAddr, CardKeyABuf, &CardRevBuf[2] ) != MI_OK )// ÑéÖ¤ÃÜÂë
+ 148   1              {
+ 149   2                      psUartDataRevSend->UartErrCode = ERROR_KEYA_IC;
+ 150   2                      memset( &psUartDataRevSend->UartDataBuf[1], 0x00, 6 );
+ 151   2                      bWarn = 1;
+ 152   2                      return FALSE;   
+ 153   2              }
+ 154   1      
+ 155   1              memcpy( CardKeyABlockBuf, &psUartDataRevSend->UartDataBuf[7], 6 );
+ 156   1      
+ 157   1              if( PcdWrite( KeyBlockAddr, CardKeyABlockBuf ) != MI_OK )// Ð´¿¨
+ 158   1              {
+ 159   2                      psUartDataRevSend->UartErrCode = ERROR_WRITE_IC;
+ 160   2                      memset( &psUartDataRevSend->UartDataBuf[1], 0x00, 6 );
+ 161   2                      bWarn = 1;
+ 162   2                      return FALSE;
+ 163   2              }
+ 164   1      
+ 165   1              memset( &psUartDataRevSend->UartDataBuf[1], 0x00, 6 );
+ 166   1              bPass = 1;
+ 167   1              return TRUE;
+ 168   1      }
+ 169          
+ 170          INT8U block_write( psUartData psUartDataRevSend )
+ 171          {
+ 172   1              INT8U CardWriteBuf[16];
+ 173   1              INT8U CardKeyABuf[6];
+C51 COMPILER V9.01   CTRL                                                                  04/23/2015 00:08:45 PAGE 4   
+
+ 174   1              INT8U KeyBlockAddr;
+ 175   1      
+ 176   1              psUartDataRevSend->UartDataLen = 0x17;
+ 177   1              KeyBlockAddr = psUartDataRevSend->UartDataBuf[0];
+ 178   1         
+ 179   1         /*
+ 180   1              if( KeyBlockAddr % 4 == 3 )              ÕâÀïËø¶¨ÃÜÂë¿é
+ 181   1              {
+ 182   1                      psUartDataRevSend->UartErrCode = ERROR_BLOCK_ADDR;
+ 183   1                      memset( &psUartDataRevSend->UartDataBuf[1], 0x00, 16 );
+ 184   1                      bWarn = 1;
+ 185   1                      return FALSE;   
+ 186   1              }
+ 187   1              */
+ 188   1      
+ 189   1              if( PcdRequest( PICC_REQIDL, &CardRevBuf[0] ) != MI_OK )//Ñ°ÌìÏßÇøÄÚÎ´½øÈëÐÝÃß×´Ì¬µÄ¿¨£¬·µ»Ø¿¨Æ¬ÀàÐÍ 2×Ö½
+             -Ú        
+ 190   1              {
+ 191   2                      if( PcdRequest( PICC_REQIDL, &CardRevBuf[0] ) != MI_OK )//Ñ°ÌìÏßÇøÄÚÎ´½øÈëÐÝÃß×´Ì¬µÄ¿¨£¬·µ»Ø¿¨Æ¬ÀàÐÍ 2×Ö
+             -½Ú        
+ 192   2                      {
+ 193   3                              psUartDataRevSend->UartErrCode = ERROR_NOCARD;
+ 194   3                              memset( &psUartDataRevSend->UartDataBuf[1], 0x00, 16 );
+ 195   3                              bWarn = 1;
+ 196   3                              return FALSE;
+ 197   3                      }       
+ 198   2              }
+ 199   1      
+ 200   1              if( PcdAnticoll( &CardRevBuf[2] ) != MI_OK ) //·À³å×²£¬·µ»Ø¿¨µÄÐòÁÐºÅ 4×Ö½Ú 
+ 201   1              {
+ 202   2                      psUartDataRevSend->UartErrCode = ERROR_ATCLL;
+ 203   2                      memset( &psUartDataRevSend->UartDataBuf[1], 0x00, 16 );
+ 204   2                      bWarn = 1;
+ 205   2                      return FALSE;   
+ 206   2              }
+ 207   1      
+ 208   1              if( PcdSelect( &CardRevBuf[2] ) != MI_OK )//Ñ¡¿¨
+ 209   1              {
+ 210   2                      psUartDataRevSend->UartErrCode = ERROR_SLCT;
+ 211   2                      memset( &psUartDataRevSend->UartDataBuf[1], 0x00, 16 );
+ 212   2                      bWarn = 1;
+ 213   2                      return FALSE;
+ 214   2              }
+ 215   1      
+ 216   1              memcpy( CardKeyABuf, &psUartDataRevSend->UartDataBuf[1], 6 );
+ 217   1      
+ 218   1              if( PcdAuthState( PICC_AUTHENT1A, KeyBlockAddr, CardKeyABuf, &CardRevBuf[2] ) != MI_OK )// ÑéÖ¤ÃÜÂë
+ 219   1              {
+ 220   2                      psUartDataRevSend->UartErrCode = ERROR_KEYA_IC;
+ 221   2                      memset( &psUartDataRevSend->UartDataBuf[1], 0x00, 16 );
+ 222   2                      bWarn = 1;
+ 223   2                      return FALSE;   
+ 224   2              }
+ 225   1      
+ 226   1              memcpy( CardWriteBuf, &psUartDataRevSend->UartDataBuf[7], 16 );
+ 227   1              if( PcdWrite( KeyBlockAddr, CardWriteBuf ) != MI_OK )//Ð´¿¨
+ 228   1              {
+ 229   2                      psUartDataRevSend->UartErrCode = ERROR_WRITE_IC;
+ 230   2                      memset( &psUartDataRevSend->UartDataBuf[1], 0x00, 16 );
+ 231   2                      bWarn = 1;
+ 232   2                      return FALSE;
+ 233   2              }
+C51 COMPILER V9.01   CTRL                                                                  04/23/2015 00:08:45 PAGE 5   
+
+ 234   1              bPass = 1;
+ 235   1              
+ 236   1              return TRUE;
+ 237   1      }
+ 238          
+ 239          INT8U block_read( psUartData psUartDataRevSend )
+ 240          {
+ 241   1              INT8U CardReadBuf[16];
+ 242   1              INT8U CardKeyABuf[6];
+ 243   1              INT8U KeyBlockAddr;
+ 244   1      
+ 245   1              psUartDataRevSend->UartDataLen = 0x11;
+ 246   1              KeyBlockAddr = psUartDataRevSend->UartDataBuf[0];
+ 247   1      
+ 248   1      /*      if( KeyBlockAddr % 4 == 3 )       ÕâÀïËø¶¨ÃÜÂë¿é
+ 249   1              {
+ 250   1                      psUartDataRevSend->UartErrCode = ERROR_BLOCK_ADDR;
+ 251   1                      memset( &psUartDataRevSend->UartDataBuf[1], 0x00, 16 );
+ 252   1                      bWarn = 1;
+ 253   1                      return FALSE;   
+ 254   1              }
+ 255   1        */
+ 256   1              if( PcdRequest( PICC_REQIDL, &CardRevBuf[0] ) != MI_OK )//Ñ°ÌìÏßÇøÄÚÎ´½øÈëÐÝÃß×´Ì¬µÄ¿¨£¬·µ»Ø¿¨Æ¬ÀàÐÍ 2×Ö½
+             -Ú        
+ 257   1              {
+ 258   2                      if( PcdRequest( PICC_REQIDL, &CardRevBuf[0] ) != MI_OK )//Ñ°ÌìÏßÇøÄÚÎ´½øÈëÐÝÃß×´Ì¬µÄ¿¨£¬·µ»Ø¿¨Æ¬ÀàÐÍ 2×Ö
+             -½Ú        
+ 259   2                      {
+ 260   3                              psUartDataRevSend->UartErrCode = ERROR_NOCARD;
+ 261   3                              memset( &psUartDataRevSend->UartDataBuf[1], 0x00, 16 );
+ 262   3                              bWarn = 1;
+ 263   3                              return FALSE;
+ 264   3                      }       
+ 265   2              }
+ 266   1      
+ 267   1              if( PcdAnticoll( &CardRevBuf[2] ) != MI_OK ) //·À³å×²£¬·µ»Ø¿¨µÄÐòÁÐºÅ 4×Ö½Ú 
+ 268   1              {
+ 269   2                      psUartDataRevSend->UartErrCode = ERROR_ATCLL;
+ 270   2                      memset( &psUartDataRevSend->UartDataBuf[1], 0x00, 16 );
+ 271   2                      bWarn = 1;
+ 272   2                      return FALSE;   
+ 273   2              }
+ 274   1      
+ 275   1              if( PcdSelect( &CardRevBuf[2] ) != MI_OK )//Ñ¡¿¨
+ 276   1              {
+ 277   2                      psUartDataRevSend->UartErrCode = ERROR_SLCT;
+ 278   2                      memset( &psUartDataRevSend->UartDataBuf[1], 0x00, 16 );
+ 279   2                      bWarn = 1;
+ 280   2                      return FALSE;
+ 281   2              }
+ 282   1      
+ 283   1              memcpy( CardKeyABuf, &psUartDataRevSend->UartDataBuf[1], 6 );
+ 284   1      
+ 285   1              if( PcdAuthState( PICC_AUTHENT1A, KeyBlockAddr, CardKeyABuf, &CardRevBuf[2] ) != MI_OK )// ÑéÖ¤ÃÜÂë
+ 286   1              {
+ 287   2                      psUartDataRevSend->UartErrCode = ERROR_KEYA_IC;
+ 288   2                      memset( &psUartDataRevSend->UartDataBuf[1], 0x00, 16 );
+ 289   2                      bWarn = 1;
+ 290   2                      return FALSE;   
+ 291   2              }
+ 292   1      
+ 293   1              if( PcdRead( KeyBlockAddr, CardReadBuf ) != MI_OK )// ¶Á¿¨
+C51 COMPILER V9.01   CTRL                                                                  04/23/2015 00:08:45 PAGE 6   
+
+ 294   1              {
+ 295   2                      psUartDataRevSend->UartErrCode = ERROR_READ_IC;
+ 296   2                      memset( &psUartDataRevSend->UartDataBuf[1], 0x00, 16 );
+ 297   2                      bWarn = 1;
+ 298   2                      return FALSE;
+ 299   2              }
+ 300   1              memcpy( &psUartDataRevSend->UartDataBuf[1], CardReadBuf, 16 );
+ 301   1              bPass = 1;
+ 302   1                              
+ 303   1              return TRUE;
+ 304   1      }                       
+ 305          
+ 306          
+ 307          void pc_process( void )
+ 308          {
+ 309   1              psUartData psUartDataRevSend;  //¶¨ÒåÒ»¸öÃüÁî¸ñÊ½µÄ½á¹¹Ìå£¬ÏêÏ¸Çë¿´´®¿Ú¸ñÊ½¶¨Òå¡£
+ 310   1              INT8U i;
+ 311   1              INT8U Check = 0xFE;                //Ö¸ÁîÆðÊ¼·û
+ 312   1              INT8U Len;
+ 313   1      
+ 314   1              if( UartComp != TRUE )         //ÅÐ¶Ï´®¿ÚÊÇ·ñÒÑ¾­ÊÕµ½ÃüÁî£¬Ã»ÊÕµ½ÔòÍË³ö¡£
+ 315   1              {
+ 316   2                      return;
+ 317   2              }
+ 318   1      
+ 319   1              psUartDataRevSend = (psUartData)UartBuf; //½«´®¿ÚÖ¸Áî×ª»¯Îªµ±Ç°ÃüÁî¸ñÊ½
+ 320   1              Len = psUartDataRevSend->UartCmdLen + psUartDataRevSend->UartDataLen + 3; //×Ö·û³¤¶ÈÎª×Ü³¤¶È¼õ1
+ 321   1      
+ 322   1              for( i = 0; i < ( Len - 1 ); i ++ )     //Òì»òÐ£Ñé¼ÆËã
+ 323   1              {
+ 324   2                Check ^= UartBuf[i];
+ 325   2              }
+ 326   1      
+ 327   1       /*ÅÐ¶Ï¼ÆËãÖµºÍ½ÓÊÕµ½µÄÐ£ÑéÂëÊÇ·ñÏàÍ¬£¬ÊÇÔòÖ¸ÁîÕýÈ·£¬Ìø¹ý´Ë´úÂë£»·ñÔòÖ¸Áî´íÎó£¬Ö´ÐÐ´Ë´úÂë£¬ÍË³ö*/
+ 328   1              if( Check != UartBuf[Len - 1] )
+ 329   1              {
+ 330   2                      psUartDataRevSend->UartErrCode = ERROR_CHECK; //½«±êÊ¾·ûÅÐ¶¨Îª ERROR_CHECK £¨Ð£Ñé´íÎó£©
+ 331   2                      send_rebck( psUartDataRevSend );              //·µ»Ø¸øÖ¸Áî·¢ËÍ·½
+ 332   2                      uart_over();                                                              //´®¿ÚÊý¾ÝÇå0
+ 333   2                      return;
+ 334   2              }
+ 335   1              
+ 336   1              //Ö¸ÁîÕýÈ·Ê±ºòÖ´ÐÐ
+ 337   1      
+ 338   1              switch( psUartDataRevSend->UartCmd )
+ 339   1              {       
+ 340   2                      case 0x0002:  //¼ì²â´®¿Ú×´Ì¬ -> fe 03 01 c1 c0 er 00 ck,  <- fc 03 01 c1 c0 er aa ck
+ 341   2                              check_com( psUartDataRevSend );
+ 342   2                              break;
+ 343   2      
+ 344   2                      case 0x0003: //²éÑ¯¿¨ºÅ  ->     fe 03 04 c1 c0 er 00 00 00 00 ck, <- fc 03 04 c1 c0 er sn3 sn2 sn1 sn0 ck
+ 345   2                              req_card_sn( psUartDataRevSend );
+ 346   2                              break;
+ 347   2      
+ 348   2                      case 0x0110: //ÐÞ¸ÄÃÜÂë·½Ê½0 fe 03 0d c1 c0 er kn o5 o4.. o0 n5 n4.. n0 ck, <-fe 03 07 c1 c0 er kn n5 n4
+             -.. n0 ck        
+ 349   2                              updata_key( psUartDataRevSend ); //ÐÞ¸ÄÃÜÂë kn%4 == 3   
+ 350   2                              break;
+ 351   2      
+ 352   2                      case 0x0120: //¶ÁÊý¾Ý¿é·½Ê½0  -> fe 03 07 c1 c0 er kn ky5 ... ky0 ck, <- fc 03 11 c1 c0 er kn d15...d0 c
+             -k 
+ 353   2                              block_read( psUartDataRevSend ); //¶ÁÊý¾Ý¿é kn%4 != 3   
+C51 COMPILER V9.01   CTRL                                                                  04/23/2015 00:08:45 PAGE 7   
+
+ 354   2                              break;
+ 355   2      
+ 356   2                      case 0x0130: //Ð´Êý¾Ý¿é·½Ê½0  -> fe 03 07 c1 c0 er kn ky5 ... ky0 ck, <- fc 03 11 c1 c0 er kn d15...d0 c
+             -k 
+ 357   2                              block_write( psUartDataRevSend ); //¶ÁÊý¾Ý¿é kn%4 != 3  
+ 358   2                              break;
+ 359   2      
+ 360   2                      default:
+ 361   2                              psUartDataRevSend->UartErrCode = ERROR_NOCMD;   
+ 362   2                              break;
+ 363   2              }
+ 364   1              send_rebck( psUartDataRevSend );
+ 365   1              uart_over();
+ 366   1      }
+ 367          
+ 368          
+ 369          void ctrl_process( void )
+ 370          {                   
+ 371   1              pc_process();    //´®¿Ú´¦Àí
+ 372   1      
+ 373   1              if( bPass )              //´¦Àí³É¹¦
+ 374   1              {
+ 375   2                      bPass = 0;
+ 376   2                      pass(); 
+ 377   2              }
+ 378   1      
+ 379   1              if( bWarn )          //´¦ÀíÊ§°Ü
+ 380   1              {
+ 381   2                      bWarn = 0;
+ 382   2                      warn();
+ 383   2              }
+ 384   1      }
+ 385          
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   1589    ----
+   CONSTANT SIZE    =      6    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =     44      83
+   DATA SIZE        =   ----    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
